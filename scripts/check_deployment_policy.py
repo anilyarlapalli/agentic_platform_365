@@ -274,6 +274,38 @@ def _check_python_entrypoints() -> list[str]:
     return errors
 
 
+def _check_dependency_audit() -> list[str]:
+    """Automation must audit the lock, not whichever environment it runs in.
+
+    ``pip-audit --strict`` over an environment includes this project, which is
+    not on PyPI, so the lookup fails and ``--strict`` reports it as a build
+    failure — a red build naming a package that has no advisories to find. The
+    export-and-audit path in ``scripts/audit_python_dependencies.sh`` is the
+    supported form; this keeps a well-meaning simplification from reinstating
+    the false failure.
+    """
+    paths = [
+        ROOT / "Makefile",
+        ROOT / ".github" / "workflows" / "ci.yml",
+        ROOT / ".github" / "workflows" / "release.yml",
+    ]
+    errors: list[str] = []
+    for path in paths:
+        try:
+            value = path.read_text()
+        except OSError as exc:
+            errors.append(f"could not inspect the dependency audit in {path.name}: {exc}")
+            continue
+        for number, line in enumerate(value.splitlines(), start=1):
+            if "pip-audit" not in line or "-r " in line:
+                continue
+            errors.append(
+                f"{path.relative_to(ROOT)}:{number} audits an environment rather than the "
+                f"lock; use scripts/audit_python_dependencies.sh"
+            )
+    return errors
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -295,6 +327,7 @@ def main() -> int:
     errors.extend(_check_runbooks())
     errors.extend(_check_secrets())
     errors.extend(_check_python_entrypoints())
+    errors.extend(_check_dependency_audit())
     if errors:
         print("deployment policy failed:", file=sys.stderr)
         for error in errors:

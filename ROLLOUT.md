@@ -1948,3 +1948,38 @@ undrained outbox rows from a worker left running during manual console testing.
 the re-run was green. Worth recording because the known symptom was *one*
 outbox test failing; it can present as two, and the second is a relay-fairness
 test in a different file.
+
+### Correction — the dependency audit was auditing the wrong thing (2026-08-16)
+
+The first CI run on `main` failed at `pip-audit --strict`. It reported no
+vulnerability. It reported this:
+
+```
+local-platform: Dependency not found on PyPI and could not be audited (0.1.0)
+```
+
+`pip-audit` was auditing the installed *environment*, which since the Phase 15
+packaging fix includes this project itself. `local-platform` is not published to
+PyPI, the lookup fails, and `--strict` promotes "could not be audited" to a build
+failure. A red build naming a package that has no advisories to find.
+
+This is a **correction to a Phase 15 claim**. That phase recorded that
+`pip-audit --strict` reported no known vulnerabilities, and it did at the time —
+then the same phase made the project installable, which put it into the audited
+set, and the check was never re-run afterwards. The claim was true when written
+and false when committed. The first honest CI run is exactly what surfaced it.
+
+`--skip-editable` is not the fix: `--strict` treats a skipped distribution as an
+error too, so it fails with `distribution marked as editable` instead.
+
+`scripts/audit_python_dependencies.sh` now exports the lock with
+`--no-emit-project` and audits that. This is better than a suppression: it audits
+the 117 third-party dependencies that actually ship, independently of how any
+particular virtual environment was assembled — the same reason the lock is the
+authority everywhere else here. Result: **no known vulnerabilities**, so nothing
+was being hidden.
+
+`check_deployment_policy` now refuses any `pip-audit` invocation in the Makefile
+or either workflow that does not pass `-r`, so simplifying the script away
+reinstates a failing policy gate rather than a silently false audit. Verified by
+reinstating the old form and confirming the gate fires.

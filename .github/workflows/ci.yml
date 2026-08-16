@@ -43,7 +43,7 @@ jobs:
           docker compose -f deploy/compose.yml -f deploy/compose.runtime.yml config --quiet
 
       - name: Audit Python dependencies
-        run: .venv/bin/pip-audit --strict
+        run: UV=/tmp/platform-uv-bootstrap/bin/uv ./scripts/audit_python_dependencies.sh
 
       - name: Start isolated substrate
         run: docker compose -f deploy/compose.yml up -d --wait

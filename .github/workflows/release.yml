@@ -29,7 +29,7 @@ jobs:
         run: |
           .venv/bin/ruff check .
           .venv/bin/python -m scripts.check_deployment_policy
-          .venv/bin/pip-audit --strict
+          UV=/tmp/platform-uv-bootstrap/bin/uv ./scripts/audit_python_dependencies.sh
           docker run --rm --user "$(id -u):$(id -g)" \
             --env HOME=/tmp --volume "$PWD/web:/app" --workdir /app \
             node:24.19.0-alpine3.24@sha256:d32cdf619f63fe0471182d08996dd516c6275bb5fd31ae06e55a570bd9e1ad43 \

@@ -44,7 +44,7 @@ lint: ## Lint without modifying source
 	@.venv/bin/ruff check .
 
 audit: ## Audit locked Python and web dependencies
-	@.venv/bin/pip-audit --strict
+	@./scripts/audit_python_dependencies.sh
 	@cd web && npm audit --audit-level=high
 
 policy: ## Validate hardened manifests, runbooks and secret hygiene
