@@ -1,6 +1,7 @@
 # Open work
 
-Status as of 2026-08-16, head `b2af317`. CI green on all three jobs.
+Status as of 2026-08-16. Items 1 and 2 (the GraphRAG flag and its engine-root
+default) are closed in Phase 17 — see ROLLOUT.md.
 
 `ROLLOUT.md` records what happened and why. This file records what has **not**
 happened yet, and the order to do it in. Update both.

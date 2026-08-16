@@ -26,6 +26,13 @@ from platform_core.ports.errors import BudgetExceededError, TransientError
 from platform_core.scaling import sessions
 from workloads.chat import service as chat
 
+# Safe at module level: `engine` imports only stdlib, numpy and settings, and
+# touches the external tree no earlier than `prepare_imports`. The *service*
+# import stays deferred inside the handler for that reason. Importing the
+# exception lazily inside the `try` would leave it undefined in the `except`
+# clause on the dense path, which is a NameError waiting for an outage.
+from workloads.graphrag.engine import GraphRAGDisabled
+
 logger = logging.getLogger("platform.api.query")
 router = APIRouter(prefix="/api", tags=["query"])
 
@@ -175,6 +182,12 @@ def query(payload: QueryRequest, ctx: RequestContext = Depends(get_context)) -> 
             llm=_client(),
             session_id=payload.session_id,
         )
+    except GraphRAGDisabled as exc:
+        # 501, not 500: the request was well formed and the platform is working
+        # correctly — this deployment simply does not carry the graph engine.
+        # A 5xx that says "not configured" is the difference between a client
+        # retrying forever and a client switching to dense mode.
+        raise HTTPException(status_code=501, detail=str(exc)) from None
     except sessions.SessionNotFound:
         # 404 whether the session is absent or belongs to someone else — telling
         # them apart confirms an id exists.

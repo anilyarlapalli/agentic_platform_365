@@ -238,9 +238,16 @@ class Settings(BaseSettings):
     # Read-only import of the canonical engine tree. Nothing in this platform
     # writes to it; `check_coherence` verifies it exists before a worker that
     # needs it starts, rather than failing on the first job.
-    graphrag_engine_root: Path = Path(
-        "/home/anil-y/app_ideas/manufacture/R_repo/AgenticAI_Manufacturing"
-    )
+    #
+    # No default. The tree lives outside this repository and its location is
+    # per-machine, so a default is either wrong everywhere or right on exactly
+    # one laptop — this one previously carried an absolute path under
+    # /home/anil-y, including in the production manifests.
+    graphrag_engine_root: Path | None = None
+    # Whether this deployment has the engine at all. Enforced in
+    # `workloads.graphrag.engine.prepare_imports`, which every path to the
+    # engine passes through, so false disables the feature rather than merely
+    # silencing this check.
     graphrag_enabled: bool = False
 
     # ── derived ───────────────────────────────────────────────────────────
@@ -343,10 +350,16 @@ class Settings(BaseSettings):
                 f"expected answer would also be deciding whether it was met"
             )
 
-        if self.graphrag_enabled and not self.graphrag_engine_root.exists():
-            problems.append(
-                f"graphrag_enabled but engine root {self.graphrag_engine_root} is missing"
-            )
+        if self.graphrag_enabled:
+            if self.graphrag_engine_root is None:
+                problems.append(
+                    "graphrag_enabled but graphrag_engine_root is unset — the engine "
+                    "tree has no default because it lives outside this repository"
+                )
+            elif not self.graphrag_engine_root.exists():
+                problems.append(
+                    f"graphrag_enabled but engine root {self.graphrag_engine_root} is missing"
+                )
 
         if self.run_retry_max_seconds < self.run_retry_base_seconds:
             problems.append(

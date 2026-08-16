@@ -48,6 +48,14 @@ from platform_core.settings import get_settings
 
 logger = logging.getLogger("platform.workloads.graphrag.engine")
 
+class GraphRAGDisabled(RuntimeError):
+    """The borrowed engine is not available in this deployment.
+
+    A refusal, not a failure: the platform is configured without GraphRAG, so
+    callers should report that plainly rather than surface an import error.
+    """
+
+
 _installed = False
 _report: dict[str, Any] = {}
 _prepared_root: Path | None = None
@@ -121,9 +129,31 @@ def prepare_imports(engine_root: Path | None = None) -> Path:
     Schema review needs only ``core.kg.schema``. Loading ``KnowledgeGraph`` for
     that path also imports the graph, ranking, and document stacks, turning a
     pure YAML check into an accidental dependency on the entire engine.
+
+    This is the one place the engine tree is resolved, so it is also where
+    ``graphrag_enabled`` is enforced. Every path that reaches the borrowed
+    engine — graph chat, onboarding drafts, and schema validation — arrives
+    here first.
     """
     global _prepared_root
     settings = get_settings()
+    if not settings.graphrag_enabled:
+        # Previously the flag guarded only a startup existence check, so a
+        # deployment with GRAPHRAG_ENABLED=false still imported the engine on
+        # the first graph request and failed at request time with whatever the
+        # missing tree happened to raise. Setting the flag false removed the
+        # warning rather than the feature.
+        raise GraphRAGDisabled(
+            "GraphRAG is not enabled in this deployment. Set GRAPHRAG_ENABLED=true "
+            "and GRAPHRAG_ENGINE_ROOT to the canonical engine tree to use graph "
+            "mode, onboarding drafts, or schema validation."
+        )
+    if engine_root is None and settings.graphrag_engine_root is None:
+        raise GraphRAGDisabled(
+            "GRAPHRAG_ENABLED=true but GRAPHRAG_ENGINE_ROOT is unset. The engine "
+            "tree has no default: it lives outside this repository and its "
+            "location is per-machine."
+        )
     root = Path(engine_root or settings.graphrag_engine_root).resolve()
     if not root.exists():
         raise FileNotFoundError(f"GraphRAG engine tree not found at {root}")

@@ -1983,3 +1983,47 @@ was being hidden.
 or either workflow that does not pass `-r`, so simplifying the script away
 reinstates a failing policy gate rather than a silently false audit. Verified by
 reinstating the old form and confirming the gate fires.
+
+## Phase 17 — the GraphRAG flag disables the feature (2026-08-16)
+
+`GRAPHRAG_ENABLED` appeared in exactly two places: its declaration and one
+`check_coherence` branch that checked the engine tree existed. No request path
+consulted it. `POST /api/query` with `mode:"graph"` called `engine.install()`
+unconditionally, so the flag's effect was **inverted** — setting it false, as
+`deploy/k8s/base/foundation.yaml` does, removed the startup check while leaving
+the feature live. A deployment without the tree failed at request time on
+whatever the missing directory happened to raise, instead of refusing at boot.
+
+The flag is now enforced in `workloads.graphrag.engine.prepare_imports`, which
+is the single place the engine tree is resolved and which all three entry points
+pass through: graph chat, onboarding drafts, and schema validation. A new
+property test scans `platform_core/` and `workloads/` and fails if any module
+other than `settings.py` and `engine.py` reads `graphrag_engine_root`, so a
+second resolver cannot reopen the hole quietly.
+
+`graphrag_engine_root` no longer has a default. It was
+`/home/anil-y/app_ideas/manufacture/R_repo/AgenticAI_Manufacturing` — an
+absolute path under one developer's home directory, shipped in the production
+manifests. `GRAPHRAG_ENABLED=true` without a root is now a startup refusal.
+`POST /api/query` answers **501** when the engine is absent: the request was well
+formed and the platform is healthy, so a client should switch to dense mode
+rather than retry.
+
+### What removing the default exposed
+
+Four cases in `test_schema_edit.py` — the ones that call `validate_schema_yaml`,
+which parses through the engine's `core.kg.schema` — were **silently dependent on
+that personal path**. Verified against the pre-change code: point the root at a
+directory that does not exist and all four fail.
+
+They are now explicitly skipped unless `GRAPHRAG_ENABLED=true` and the tree is
+present, with the reason printed. Skipping is honest here — the engine is
+genuinely optional — but the dependency is declared rather than inherited from a
+default, so it holds on any machine.
+
+This has a consequence worth investigating: **those four tests cannot have passed
+on a runner without the engine tree**, so the property suite has been
+machine-dependent since the tree was first referenced. Any green CI run that
+included them deserves a second look.
+
+Verified: 169 passed, 4 skipped; ruff and deployment policy clean.

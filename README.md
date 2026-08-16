@@ -126,6 +126,13 @@ have produced environment-specific evidence.
 ## Workloads and external source trees
 
 `workloads/echo/` is deliberately trivial so platform properties never depend
-on GraphRAG. `workloads/graphrag/` can read a separately configured canonical
-engine tree when `GRAPHRAG_ENABLED=true`; startup refuses the setting when that
-tree is absent, and this repository does not write to it.
+on GraphRAG. `workloads/graphrag/` reads a separately configured canonical
+engine tree, and this repository never writes to it.
+
+That workload is off unless `GRAPHRAG_ENABLED=true` **and** `GRAPHRAG_ENGINE_ROOT`
+points at the tree — there is no default root, because it lives outside this
+repository and its location is per-machine. With the flag off, graph chat,
+onboarding drafts and schema validation all refuse at their single entry point
+rather than failing later on an import; `POST /api/query` with `mode: "graph"`
+answers `501` and says so. Startup additionally refuses the flag when the
+configured tree is absent.

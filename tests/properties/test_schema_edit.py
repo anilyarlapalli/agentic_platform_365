@@ -28,12 +28,35 @@ from sqlalchemy.exc import IntegrityError
 
 from platform_core.db.engine import tenant_session
 from platform_core.identity.principal import ActorType, Principal, RequestContext, Role
+from platform_core.settings import get_settings
 from workloads.graphrag.artifacts import (
     InvalidSchema,
     taxonomy_fit,
     validate_schema_yaml,
 )
 from workloads.onboarding import store
+
+# `validate_schema_yaml` parses through the borrowed engine's `core.kg.schema`,
+# so the four cases below need the external tree. They used to depend on it
+# *silently*, via a settings default that pointed at one developer's home
+# directory: green on that laptop, red on any other machine and in CI, with
+# nothing in the test naming the requirement.
+#
+# Skipping is the honest outcome — the dependency is real and the engine is
+# optional — but it is declared, and the reason is printed, so a permanently
+# skipped case cannot be mistaken for a passing one.
+_settings = get_settings()
+needs_engine = pytest.mark.skipif(
+    not (
+        _settings.graphrag_enabled
+        and _settings.graphrag_engine_root is not None
+        and _settings.graphrag_engine_root.exists()
+    ),
+    reason=(
+        "requires the canonical GraphRAG engine tree: set GRAPHRAG_ENABLED=true "
+        "and GRAPHRAG_ENGINE_ROOT to a tree that exists"
+    ),
+)
 
 DOMAIN = "edit-properties"
 COLLECTION = "edit-properties"
@@ -278,6 +301,7 @@ def test_a_taxonomy_cannot_be_edited_once_approved(
 # ── the report that makes the edit informed ───────────────────────────────
 
 
+@needs_engine
 def test_an_unparseable_taxonomy_is_refused_before_it_is_stored():
     """The failure mode of accepting one is silent, which is why this is a 400.
 
@@ -290,6 +314,7 @@ def test_an_unparseable_taxonomy_is_refused_before_it_is_stored():
             validate_schema_yaml(bad)
 
 
+@needs_engine
 def test_the_fit_report_names_what_the_schema_fails_to_declare(record_evidence):
     """The signal that was missing entirely, computable with no corpus and no LLM.
 
@@ -328,6 +353,7 @@ def test_the_fit_report_names_what_the_schema_fails_to_declare(record_evidence):
     )
 
 
+@needs_engine
 def test_retyping_is_what_actually_clears_the_unclassified_instances(
     author, session_id, record_evidence
 ):
@@ -373,6 +399,7 @@ def test_retyping_is_what_actually_clears_the_unclassified_instances(
     )
 
 
+@needs_engine
 def test_an_edge_type_with_undeclared_endpoints_is_reported():
     """A different failure from the one above, and it is checkable from YAML alone."""
     orphaned = DRAFTED_YAML.replace("source: [Component]", "source: [Ghost]")
