@@ -1,0 +1,75 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  # Release tooling must suffix this name with the release id. Job pod templates
+  # are immutable; a release-specific name also preserves rollout evidence.
+  name: platform-migrate-unreleased
+  labels:
+    app.kubernetes.io/name: platform-migrator
+    app.kubernetes.io/component: migration
+    app.kubernetes.io/version: unreleased
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 900
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: platform-migrator
+        app.kubernetes.io/component: migration
+        app.kubernetes.io/version: unreleased
+    spec:
+      restartPolicy: Never
+      serviceAccountName: platform-migrator
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: migrator
+          image: registry.example.invalid/local-platform:unreleased
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "apps.migrator.main"]
+          envFrom:
+            - configMapRef:
+                name: platform-runtime-config
+          env:
+            - name: SERVICE_ROLE
+              value: migrator
+            - name: RELEASE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['app.kubernetes.io/version']
+            - name: DATABASE_OWNER_URL
+              valueFrom:
+                secretKeyRef:
+                  name: platform-migrator-secrets
+                  key: database-owner-url
+            - name: TELEMETRY_HMAC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: platform-migrator-secrets
+                  key: telemetry-hmac-key
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 64Mi

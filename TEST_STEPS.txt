@@ -1,0 +1,274 @@
+LOCAL PLATFORM — TEST STEPS
+===========================
+
+Run every command from:
+  /home/anil-y/Documents/azure_deployments/local-platform-codex
+
+
+1. ONE-TIME ENVIRONMENT SETUP
+-----------------------------
+
+  cd /home/anil-y/Documents/azure_deployments/local-platform-codex
+  uv sync --frozen --extra dev
+
+If .env.local does not exist, create it from the example:
+
+  cp .env.example .env.local
+
+For live chat, embedding, and onboarding, edit .env.local and set:
+
+  OPENAI_API_KEY=<your key>
+
+Do not commit .env.local or paste the key into logs.
+
+
+2. START AND INITIALISE THE SUBSTRATE
+-------------------------------------
+
+  make up
+  make migrate
+  make init-store
+
+Expected init-store result:
+
+  bucket 'platform-artifacts' already present at http://127.0.0.1:9100
+
+"created" instead of "already present" is also successful on the first run.
+
+
+3. SEED UI TEST DATA
+--------------------
+
+The following commands make real embedding calls and require the configured
+model provider:
+
+  make seed-chat
+  make seed-kg
+
+make seed-chat creates two tenants and three users per tenant.
+make seed-kg creates the relation-rich kg-demo collection used by onboarding.
+
+All demo users use this password:
+
+  demo-password-1234
+
+Acme users:
+
+  owner@acme.example
+  reviewer@acme.example
+  operator@acme.example
+
+Globex users:
+
+  owner@globex.example
+  reviewer@globex.example
+  operator@globex.example
+
+
+4. START THE APPLICATION IN THREE TERMINALS
+-------------------------------------------
+
+Terminal 1 — API:
+
+  cd /home/anil-y/Documents/azure_deployments/local-platform-codex
+  make api
+
+Terminal 2 — worker (required for onboarding drafts):
+
+  cd /home/anil-y/Documents/azure_deployments/local-platform-codex
+  make worker
+
+Terminal 3 — web console:
+
+  cd /home/anil-y/Documents/azure_deployments/local-platform-codex
+  make web
+
+If web dependencies have not been installed yet, run this once before make web:
+
+  make web-install
+
+
+5. BASIC HEALTH CHECKS
+----------------------
+
+In a fourth terminal:
+
+  curl -fsS http://127.0.0.1:8100/health
+  curl -fsS http://127.0.0.1:8100/health/ready
+  curl -I http://127.0.0.1:3000
+
+Then open:
+
+  http://127.0.0.1:3000
+
+
+6. TEST CHAT (/)
+----------------
+
+A. Sign in as the Acme operator:
+
+  Tenant:   demo-acme
+  Subject:  operator@acme.example
+  Password: demo-password-1234
+
+B. Keep mode set to dense and collection set to maintenance.
+
+C. Ask:
+
+  What is the recommended torque for spindle SA-400?
+
+D. Verify:
+
+  - The answer is grounded in Acme sources.
+  - The expected Acme value is 145 Nm.
+  - Source cards, token usage, latency, cost, and grounded state render.
+  - A second question continues the same session.
+
+E. Sign out and repeat as Globex:
+
+  Tenant:   demo-globex
+  Subject:  operator@globex.example
+  Password: demo-password-1234
+
+F. Ask the same SA-400 question and verify the expected Globex value is 210 Nm.
+   Seeing 145 Nm here would indicate a tenant-isolation failure.
+
+
+7. TEST ADMIN (/admin)
+----------------------
+
+A. Sign in as the Acme owner:
+
+  Tenant:   demo-acme
+  Subject:  owner@acme.example
+  Password: demo-password-1234
+
+B. Open:
+
+  http://127.0.0.1:3000/admin
+
+C. Verify these panels load without unexpected 401, 403, or 500 errors:
+
+  - Usage and budget
+  - Approvals
+  - Runs
+  - Documents
+  - Evaluation
+  - Members
+
+D. Verify the capability chips are visible and owner actions are enabled.
+
+E. Sign out, sign in as operator@acme.example, and reopen /admin.
+   Verify restricted panels show explicit capability locks instead of exposing
+   owner controls.
+
+
+8. TEST ONBOARDING (/admin/onboard)
+-----------------------------------
+
+This test spends real model tokens. make seed-kg and make worker must already
+be running/completed.
+
+A. Sign in as owner@acme.example and open:
+
+  http://127.0.0.1:3000/admin/onboard
+
+B. Start a draft with:
+
+  Domain:           kgdemo
+  Collection:       kg-demo
+  Chunks to sample: 40
+
+C. Verify the new session enters drafting and the persisted step trail advances.
+   Keep the worker terminal visible for processing errors. The page polls every
+   five seconds; use Refresh if necessary.
+
+D. Wait until the session reaches draft_ready. Verify:
+
+  - Instances and predicates are non-zero.
+  - The session says "relations available", not "schema-only · no edges".
+  - Candidate questions and taxonomy details render.
+  - The owner cannot approve their own draft (maker/checker separation).
+
+E. Sign out and sign in as:
+
+  Tenant:   demo-acme
+  Subject:  reviewer@acme.example
+  Password: demo-password-1234
+
+F. Return to /admin/onboard, approve the draft, and then publish it.
+
+G. Verify kgdemo appears under Live taxonomies as:
+
+  published · relations available
+
+
+9. TEST PUBLISHED GRAPH CHAT
+----------------------------
+
+A. Return to http://127.0.0.1:3000/ while signed in to demo-acme.
+
+B. Select:
+
+  Mode:          graph
+  Collection:    kg-demo
+  Schema domain: kgdemo
+
+C. Ask:
+
+  What causes vibration fault F-207?
+
+D. Verify:
+
+  - The graph result is not marked edgeless.
+  - Graph node and edge counts are greater than zero.
+  - Sources show retrieval signals.
+  - The answer is grounded in the kg-demo corpus.
+
+
+10. TEST THE PERMANENT IMPORT/PACKAGING FIX
+-------------------------------------------
+
+  make init-store
+  .venv/bin/pytest tests/unit/test_packaging.py -q
+  .venv/bin/python -I -c "import apps, platform_core, workloads; print('imports ok')"
+
+Expected:
+
+  - init-store completes without ModuleNotFoundError.
+  - 2 packaging tests pass.
+  - The isolated import command prints: imports ok
+
+
+11. RUN AUTOMATED REGRESSION GATES
+----------------------------------
+
+Stop make worker with Ctrl+C before chaos, load, or mutation tests. A live
+polling worker can lease runs owned by those suites and invalidate their setup.
+
+Fast gates:
+
+  make lock-check
+  make lint
+  make policy
+  .venv/bin/pytest tests/unit tests/properties -q
+  make web-check
+
+Longer production-control gates:
+
+  make chaos
+  make load
+  make mutate
+
+
+12. SHUT DOWN
+-------------
+
+Stop make api, make worker, and make web with Ctrl+C in their terminals.
+
+Stop infrastructure while retaining data volumes:
+
+  make down
+
+Do not run make destroy unless you intentionally want to delete all local
+Postgres, Redis, MinIO, Grafana, Prometheus, Loki, and Jaeger volumes.

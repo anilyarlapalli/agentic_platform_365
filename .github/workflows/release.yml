@@ -1,0 +1,150 @@
+name: release-images
+
+on:
+  push:
+    tags: ["v[0-9]*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout tagged source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install frozen Python environment
+        run: |
+          python3 -m venv /tmp/platform-uv-bootstrap
+          /tmp/platform-uv-bootstrap/bin/pip install --disable-pip-version-check uv==0.11.26
+          /tmp/platform-uv-bootstrap/bin/uv lock --check
+          /tmp/platform-uv-bootstrap/bin/uv sync --frozen --extra dev
+
+      - name: Static and dependency gates
+        run: |
+          .venv/bin/ruff check .
+          .venv/bin/python -m scripts.check_deployment_policy
+          .venv/bin/pip-audit --strict
+          docker run --rm --user "$(id -u):$(id -g)" \
+            --env HOME=/tmp --volume "$PWD/web:/app" --workdir /app \
+            node:24.19.0-alpine3.24@sha256:d32cdf619f63fe0471182d08996dd516c6275bb5fd31ae06e55a570bd9e1ad43 \
+            sh -ec 'npm ci --ignore-scripts && npm audit --audit-level=high && npm run typegen && npm run typecheck && npm run build'
+
+      - name: Database-backed release gates
+        run: |
+          docker compose -f deploy/compose.yml up -d --wait
+          .venv/bin/alembic upgrade head
+          .venv/bin/python -m scripts.init_object_store
+          .venv/bin/alembic current
+          .venv/bin/pytest tests/unit tests/properties -q
+
+      - name: Crash, contention and control-mutation release gates
+        run: |
+          .venv/bin/pytest tests/chaos -q
+          .venv/bin/pytest tests/load -q
+          .venv/bin/python -m scripts.mutation_check
+
+      - name: Build and scan final image filesystems
+        run: |
+          docker build --build-arg "RELEASE=$GITHUB_SHA" \
+            -t local-platform:release-verify -f Dockerfile .
+          docker build -t local-platform-web:release-verify -f web/Dockerfile web
+          scripts/scan_container_images.sh \
+            local-platform:release-verify local-platform-web:release-verify
+
+      - name: Substrate logs on failure
+        if: failure()
+        run: docker compose -f deploy/compose.yml logs --no-color --tail=200
+
+      - name: Stop substrate
+        if: always()
+        run: docker compose -f deploy/compose.yml down -v
+
+  publish:
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Checkout tagged source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Resolve immutable image names and tags
+        id: names
+        run: |
+          repository=$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
+          release_tag=$(printf '%s' "${GITHUB_REF_NAME:-manual-$GITHUB_SHA}" | tr -c 'A-Za-z0-9_.-' '-')
+          printf 'runtime=ghcr.io/%s/runtime\n' "$repository" >> "$GITHUB_OUTPUT"
+          printf 'web=ghcr.io/%s/web\n' "$repository" >> "$GITHUB_OUTPUT"
+          printf 'tag=%s\n' "$release_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Authenticate to GHCR
+        run: |
+          printf '%s' "${{ secrets.GITHUB_TOKEN }}" | \
+            docker login ghcr.io --username "${{ github.actor }}" --password-stdin
+
+      - name: Create isolated BuildKit builder
+        run: |
+          docker buildx create --driver docker-container --name release-builder --use
+          docker buildx inspect --bootstrap
+
+      - name: Build and push runtime image with SBOM/provenance
+        run: |
+          docker buildx build --platform linux/amd64 --push \
+            --provenance=mode=max --sbom=true --metadata-file /tmp/runtime-metadata.json \
+            --build-arg "RELEASE=$GITHUB_SHA" \
+            --tag "${{ steps.names.outputs.runtime }}:${{ steps.names.outputs.tag }}" \
+            --tag "${{ steps.names.outputs.runtime }}:sha-$GITHUB_SHA" \
+            -f Dockerfile .
+
+      - name: Capture runtime digest
+        id: runtime
+        run: |
+          digest=$(python3 -c 'import json; print(json.load(open("/tmp/runtime-metadata.json"))["containerimage.digest"])')
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push web image with SBOM/provenance
+        run: |
+          docker buildx build --platform linux/amd64 --push \
+            --provenance=mode=max --sbom=true --metadata-file /tmp/web-metadata.json \
+            --tag "${{ steps.names.outputs.web }}:${{ steps.names.outputs.tag }}" \
+            --tag "${{ steps.names.outputs.web }}:sha-$GITHUB_SHA" \
+            -f web/Dockerfile web
+
+      - name: Capture web digest
+        id: web
+        run: |
+          digest=$(python3 -c 'import json; print(json.load(open("/tmp/web-metadata.json"))["containerimage.digest"])')
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Sign runtime provenance with GitHub OIDC
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-name: ${{ steps.names.outputs.runtime }}
+          subject-digest: ${{ steps.runtime.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false
+
+      - name: Sign web provenance with GitHub OIDC
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-name: ${{ steps.names.outputs.web }}
+          subject-digest: ${{ steps.web.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false
+
+      - name: Publish immutable references
+        run: |
+          printf 'runtime=%s@%s\n' "${{ steps.names.outputs.runtime }}" "${{ steps.runtime.outputs.digest }}"
+          printf 'web=%s@%s\n' "${{ steps.names.outputs.web }}" "${{ steps.web.outputs.digest }}"

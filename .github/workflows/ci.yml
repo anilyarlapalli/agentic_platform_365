@@ -1,0 +1,133 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: "17 2 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Checkout immutable source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Bootstrap pinned uv
+        run: |
+          python3 -m venv /tmp/platform-uv-bootstrap
+          /tmp/platform-uv-bootstrap/bin/pip install --disable-pip-version-check uv==0.11.26
+
+      - name: Validate and install frozen dependencies
+        run: |
+          /tmp/platform-uv-bootstrap/bin/uv lock --check
+          /tmp/platform-uv-bootstrap/bin/uv sync --frozen --extra dev
+
+      - name: Static policy, lint and compilation
+        run: |
+          .venv/bin/ruff check .
+          .venv/bin/python -m scripts.check_deployment_policy
+          .venv/bin/python -m compileall -q apps platform_core workloads tests
+          docker compose -f deploy/compose.yml -f deploy/compose.runtime.yml config --quiet
+
+      - name: Audit Python dependencies
+        run: .venv/bin/pip-audit --strict
+
+      - name: Start isolated substrate
+        run: docker compose -f deploy/compose.yml up -d --wait
+
+      - name: Apply schema and initialise object storage
+        run: |
+          .venv/bin/alembic upgrade head
+          .venv/bin/python -m scripts.init_object_store
+          .venv/bin/alembic current
+
+      - name: Unit and platform-property suites
+        run: .venv/bin/pytest tests/unit tests/properties -q
+
+      - name: Crash-recovery suite
+        run: .venv/bin/pytest tests/chaos -q
+
+      - name: Scheduled load and mutation suites
+        if: github.event_name == 'schedule'
+        run: |
+          .venv/bin/pytest tests/load -q
+          .venv/bin/python -m scripts.mutation_check
+
+      - name: Substrate logs on failure
+        if: failure()
+        run: docker compose -f deploy/compose.yml logs --no-color --tail=200
+
+      - name: Stop substrate
+        if: always()
+        run: docker compose -f deploy/compose.yml down -v
+
+  web:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout immutable source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Locked install, audit, typecheck and build on pinned Node
+        run: |
+          docker run --rm --user "$(id -u):$(id -g)" \
+            --env HOME=/tmp --volume "$PWD/web:/app" --workdir /app \
+            node:24.19.0-alpine3.24@sha256:d32cdf619f63fe0471182d08996dd516c6275bb5fd31ae06e55a570bd9e1ad43 \
+            sh -ec 'npm ci --ignore-scripts && npm audit --audit-level=high && npm run typegen && npm run typecheck && npm run build'
+
+      - name: Build production web image
+        run: docker build --check -f web/Dockerfile web
+
+  images:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout immutable source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Validate and build runtime image
+        run: |
+          docker build --check -f Dockerfile .
+          docker build --build-arg "RELEASE=$GITHUB_SHA" -t local-platform:ci -f Dockerfile .
+          test "$(docker image inspect --format '{{.Config.User}}' local-platform:ci)" = "10001:10001"
+          docker run --rm --entrypoint python local-platform:ci -c 'import apps, platform_core, workloads'
+
+      - name: Validate and build web image
+        run: |
+          docker build --check -f web/Dockerfile web
+          docker build -t local-platform-web:ci -f web/Dockerfile web
+          test "$(docker image inspect --format '{{.Config.User}}' local-platform-web:ci)" = "node"
+
+      - name: Scan final image filesystems
+        run: scripts/scan_container_images.sh local-platform:ci local-platform-web:ci
+
+      - name: Create attestation-capable BuildKit builder
+        run: |
+          docker buildx create --driver docker-container --name ci-attestation-builder --use
+          docker buildx inspect --bootstrap
+
+      - name: Verify SBOM and provenance generation
+        run: |
+          docker buildx build --platform linux/amd64 --provenance=mode=max --sbom=true \
+            --output type=oci,dest=/tmp/platform-runtime.oci.tar -f Dockerfile .
+          docker buildx build --platform linux/amd64 --provenance=mode=max --sbom=true \
+            --output type=oci,dest=/tmp/platform-web.oci.tar -f web/Dockerfile web
+          python3 -m scripts.verify_oci_attestations \
+            /tmp/platform-runtime.oci.tar /tmp/platform-web.oci.tar

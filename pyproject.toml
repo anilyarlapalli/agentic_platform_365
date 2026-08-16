@@ -1,0 +1,100 @@
+[build-system]
+# Keep the project installable in every environment. Without an explicit build
+# backend, `uv sync` installs only dependencies and repository scripts work by
+# accident only when the repository root happens to be on Python's import path.
+requires = ["setuptools==80.9.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "local-platform"
+version = "0.1.0"
+description = "Production disciplines for an AI workload, runnable locally. The RAG is the fixture; the platform is the product."
+requires-python = ">=3.12"
+
+dependencies = [
+    # ── web ────────────────────────────────────────────────────────────────
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.34",
+    "python-multipart>=0.0.20",
+
+    # ── settings: one typed object, validated at startup ───────────────────
+    # The Azure build's config module claims "no other module touches
+    # os.environ directly" and is already contradicted by token_budget.py
+    # reading four variables at import. A typed settings object makes that
+    # claim structural rather than aspirational.
+    "pydantic>=2.10",
+    "pydantic-settings>=2.7",
+
+    # ── data ───────────────────────────────────────────────────────────────
+    "sqlalchemy>=2.0.36",
+    "psycopg[binary,pool]>=3.2",
+    "pgvector>=0.3.6",
+    "alembic>=1.14",
+
+    # ── queue + cache ──────────────────────────────────────────────────────
+    "celery[redis]>=5.4",
+    "redis>=5.2",
+
+    # ── object store ───────────────────────────────────────────────────────
+    "boto3>=1.36",
+
+    # ── llm ────────────────────────────────────────────────────────────────
+    "openai>=1.60",
+    "tiktoken>=0.8",
+    # The GraphRAG adapter constructs and normalizes embedding arrays at
+    # runtime; this must not be supplied accidentally by a developer machine.
+    "numpy>=2.2",
+    # Taxonomy review is an API/runtime path, not a development-only utility.
+    "pyyaml>=6.0",
+
+    # ── identity ───────────────────────────────────────────────────────────
+    "pyjwt>=2.10",
+    "argon2-cffi>=23.1",
+
+    # ── telemetry ──────────────────────────────────────────────────────────
+    "opentelemetry-api>=1.30",
+    "opentelemetry-sdk>=1.30",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.30",
+    "opentelemetry-instrumentation-fastapi>=0.51b0",
+    "opentelemetry-instrumentation-sqlalchemy>=0.51b0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.25",
+    "httpx>=0.28",
+    "ruff>=0.9",
+    "pip-audit>=2.9",
+]
+
+[tool.setuptools.packages.find]
+include = ["platform*", "workloads*", "apps*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Property tests are the deliverable, not an afterthought: they are the only
+# thing that distinguishes an enforced guarantee from a documented intention.
+markers = [
+    "unit: isolated test that requires no external services",
+    "property: a platform guarantee that must hold for every workload",
+    "chaos: requires fault injection against live infrastructure",
+    "load: slow; measures rather than asserts",
+    "livellm: spends real money against the OpenAI API",
+]
+addopts = "-ra --strict-markers"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+# Line length is formatter-owned; enforcing E501 as well produces noise in SQL
+# migrations and long security messages without adding a correctness signal.
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# FastAPI's dependency-injection contract intentionally calls Depends() in the
+# signature. B008 is correct in general and a false positive for this idiom.
+"platform_core/api/routes/*.py" = ["B008"]

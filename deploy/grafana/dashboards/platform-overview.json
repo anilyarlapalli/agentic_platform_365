@@ -1,0 +1,163 @@
+{
+  "annotations": {"list": []},
+  "editable": false,
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "HTTP requests / second",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "sum by (service_name) (rate(platform_http_server_requests_total[5m]))", "legendFormat": "{{service_name}}"}],
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 0}
+    },
+    {
+      "type": "timeseries",
+      "title": "HTTP 5xx percentage",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "100 * sum(rate(platform_http_server_requests_total{http_response_status_code=~\"5..\"}[5m])) / clamp_min(sum(rate(platform_http_server_requests_total[5m])), 0.001)", "legendFormat": "5xx %"}],
+      "fieldConfig": {"defaults": {"unit": "percent"}},
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 0}
+    },
+    {
+      "type": "timeseries",
+      "title": "HTTP p95 latency",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "histogram_quantile(0.95, sum by (le) (rate(platform_http_server_duration_milliseconds_bucket[5m])))", "legendFormat": "p95"}],
+      "fieldConfig": {"defaults": {"unit": "ms"}},
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 0}
+    },
+    {
+      "type": "timeseries",
+      "title": "Model tokens / second",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "sum by (gen_ai_request_model, gen_ai_token_type) (rate(platform_gen_ai_tokens_total[5m]))", "legendFormat": "{{gen_ai_request_model}} {{gen_ai_token_type}}"}],
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 8}
+    },
+    {
+      "type": "timeseries",
+      "title": "Model cost / hour",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "sum by (gen_ai_request_model) (rate(platform_gen_ai_cost_USD_total[5m])) * 3600", "legendFormat": "{{gen_ai_request_model}}"}],
+      "fieldConfig": {"defaults": {"unit": "currencyUSD"}},
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 8}
+    },
+    {
+      "type": "timeseries",
+      "title": "Durable run outcomes",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "sum by (platform_workload, platform_outcome) (rate(platform_run_outcomes_total[5m]))", "legendFormat": "{{platform_workload}} {{platform_outcome}}"},
+        {"expr": "sum by (platform_outcome) (rate(platform_run_recoveries_total[5m]))", "legendFormat": "reaped {{platform_outcome}}"}
+      ],
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 8}
+    },
+    {
+      "type": "stat",
+      "title": "Pending outbox rows",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "sum(platform_outbox_pending_rows)", "legendFormat": "pending"}],
+      "gridPos": {"h": 6, "w": 6, "x": 0, "y": 16}
+    },
+    {
+      "type": "stat",
+      "title": "Oldest outbox row",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "max(platform_outbox_oldest_age_seconds)", "legendFormat": "age"}],
+      "fieldConfig": {"defaults": {"unit": "s"}},
+      "gridPos": {"h": 6, "w": 6, "x": 6, "y": 16}
+    },
+    {
+      "type": "timeseries",
+      "title": "Mandatory control failures (6h)",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "sum(increase(platform_audit_writes_total{platform_outcome=\"failed\",platform_audit_required=\"true\"}[6h]))", "legendFormat": "audit"},
+        {"expr": "sum(increase(platform_budget_ledger_writes_total{platform_outcome=\"failed\"}[6h]))", "legendFormat": "budget ledger"},
+        {"expr": "sum(increase(platform_admission_decisions_total{platform_outcome=\"unavailable\"}[6h]))", "legendFormat": "admission"},
+        {"expr": "sum(increase(platform_retention_passes_total{platform_outcome=\"failed\"}[6h]))", "legendFormat": "retention"},
+        {"expr": "sum(increase(platform_tool_executions_total{platform_outcome=\"needs_reconciliation\"}[6h]))", "legendFormat": "tool reconciliation"},
+        {"expr": "sum(increase(platform_eval_gates_total{platform_outcome=\"blocked\"}[6h]))", "legendFormat": "evaluation"}
+      ],
+      "gridPos": {"h": 6, "w": 12, "x": 12, "y": 16}
+    },
+    {
+      "type": "timeseries",
+      "title": "Continuous evaluation",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "sum by (platform_outcome) (increase(platform_eval_gates_total[6h]))", "legendFormat": "gate {{platform_outcome}}"},
+        {"expr": "sum by (platform_outcome) (increase(platform_eval_scheduler_passes_total[6h]))", "legendFormat": "scheduler {{platform_outcome}}"}
+      ],
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 22}
+    },
+    {
+      "type": "timeseries",
+      "title": "Retention enforcement",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "sum by (platform_outcome) (increase(platform_retention_passes_total[6h]))", "legendFormat": "pass {{platform_outcome}}"},
+        {"expr": "sum by (platform_retention_category) (increase(platform_retention_rows_total[6h]))", "legendFormat": "rows {{platform_retention_category}}"}
+      ],
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 22}
+    },
+    {
+      "type": "timeseries",
+      "title": "Authentication and admission",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "sum by (platform_outcome) (rate(platform_auth_attempts_total[5m]))", "legendFormat": "auth {{platform_outcome}}"},
+        {"expr": "sum by (platform_admission_scope, platform_outcome) (rate(platform_admission_decisions_total[5m]))", "legendFormat": "{{platform_admission_scope}} {{platform_outcome}}"}
+      ],
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 22}
+    },
+    {
+      "type": "timeseries",
+      "title": "Budget controls",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "sum by (platform_budget_stage, platform_outcome) (rate(platform_budget_decisions_total[5m]))", "legendFormat": "{{platform_budget_stage}} {{platform_outcome}}"},
+        {"expr": "sum by (platform_budget_operation, platform_outcome) (rate(platform_budget_ledger_writes_total[5m]))", "legendFormat": "{{platform_budget_operation}} {{platform_outcome}}"}
+      ],
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 30}
+    },
+    {
+      "type": "timeseries",
+      "title": "Governed tool outcomes",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "sum by (gen_ai_tool_name, platform_outcome) (rate(platform_tool_executions_total[5m]))", "legendFormat": "{{gen_ai_tool_name}} {{platform_outcome}}"}],
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 30}
+    },
+    {
+      "type": "timeseries",
+      "title": "Model call outcomes",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "sum by (gen_ai_request_model, platform_outcome) (rate(platform_gen_ai_calls_total[5m]))", "legendFormat": "{{gen_ai_request_model}} {{platform_outcome}}"}],
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 30}
+    },
+    {
+      "type": "timeseries",
+      "title": "Model p95 latency",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "histogram_quantile(0.95, sum by (le, gen_ai_request_model, gen_ai_operation_name) (rate(platform_gen_ai_duration_milliseconds_bucket[5m])))", "legendFormat": "{{gen_ai_request_model}} {{gen_ai_operation_name}}"}],
+      "fieldConfig": {"defaults": {"unit": "ms"}},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 38}
+    },
+    {
+      "type": "timeseries",
+      "title": "Tool p95 latency",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "histogram_quantile(0.95, sum by (le, gen_ai_tool_name) (rate(platform_tool_duration_milliseconds_bucket[5m])))", "legendFormat": "{{gen_ai_tool_name}}"}],
+      "fieldConfig": {"defaults": {"unit": "ms"}},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 38}
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 40,
+  "tags": ["platform", "production"],
+  "templating": {"list": []},
+  "time": {"from": "now-6h", "to": "now"},
+  "timezone": "browser",
+  "title": "Agentic Platform Overview",
+  "uid": "platform-overview",
+  "version": 2
+}

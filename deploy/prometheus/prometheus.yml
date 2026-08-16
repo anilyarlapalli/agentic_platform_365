@@ -1,0 +1,20 @@
+global:
+  scrape_interval: 10s
+  evaluation_interval: 10s
+  external_labels:
+    environment: local
+
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+scrape_configs:
+  # Metrics arrive via OTLP at the collector and are exposed here. The app never
+  # runs a scrape endpoint of its own, so an app replica appearing or vanishing
+  # (which is the normal state of a queue worker) does not create a stale target.
+  - job_name: otel-collector
+    static_configs:
+      - targets: ["otel-collector:8889"]
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

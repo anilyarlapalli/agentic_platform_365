@@ -1,0 +1,234 @@
+groups:
+  - name: platform-slos
+    interval: 30s
+    rules:
+      - alert: PlatformTelemetryCollectorUnavailable
+        expr: up{job="otel-collector"} != 1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: OpenTelemetry collector metrics endpoint is unavailable
+          runbook: observability/collector-unavailable
+
+      - alert: PlatformApiHighErrorRate
+        expr: |
+          sum(rate(platform_http_server_requests_total{http_response_status_code=~"5.."}[5m]))
+          /
+          clamp_min(sum(rate(platform_http_server_requests_total[5m])), 0.001)
+          > 0.05
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: API 5xx rate is above 5 percent
+          runbook: api/high-error-rate
+
+      - alert: PlatformApiLatencySloBurn
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(platform_http_server_duration_milliseconds_bucket[10m]))
+          ) > 2000
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: API p95 latency is above two seconds
+          runbook: api/high-latency
+
+      - alert: PlatformModelProviderFailureSpike
+        expr: |
+          sum(increase(platform_gen_ai_calls_total[10m])) >= 10
+          and
+          sum(increase(platform_gen_ai_calls_total{platform_outcome="error"}[10m]))
+          /
+          clamp_min(sum(increase(platform_gen_ai_calls_total[10m])), 1)
+          > 0.10
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: More than ten percent of recent model calls failed
+          runbook: model/provider-failures
+
+      - alert: PlatformOutboxStalled
+        expr: platform_outbox_oldest_age_seconds > 120
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Oldest unpublished outbox row is more than two minutes old
+          runbook: queue/outbox-stalled
+
+      - alert: PlatformQueuePublishFailures
+        expr: sum(increase(platform_queue_publish_total{platform_outcome="failed"}[10m])) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Repeated queue publish failures detected
+          runbook: queue/publish-failures
+
+      - alert: PlatformRunFailureSpike
+        expr: |
+          sum(rate(platform_run_outcomes_total{platform_outcome=~"failed|needs_reconciliation"}[10m]))
+          /
+          clamp_min(sum(rate(platform_run_outcomes_total[10m])), 0.001)
+          > 0.10
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: More than ten percent of durable runs are failing
+          runbook: worker/run-failures
+
+      - alert: PlatformLeaseExpirySpike
+        expr: sum(increase(platform_run_recoveries_total[10m])) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Repeated worker lease expiry is forcing run recovery
+          runbook: worker/run-failures
+
+      - alert: PlatformToolNeedsReconciliation
+        expr: |
+          sum(increase(platform_tool_executions_total{
+            platform_outcome="needs_reconciliation"
+          }[5m])) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: A tool write may have happened without a committed receipt
+          runbook: worker/tool-reconciliation
+
+      - alert: PlatformToolFailureSpike
+        expr: |
+          sum(increase(platform_tool_executions_total{
+            platform_outcome="failed"
+          }[10m])) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Governed tool executions are repeatedly failing
+          runbook: worker/tool-reconciliation
+
+      - alert: PlatformAdmissionControlUnavailable
+        expr: |
+          sum(increase(platform_admission_decisions_total{
+            platform_outcome="unavailable"
+          }[5m])) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: Distributed request admission control is unavailable
+          runbook: security/admission-unavailable
+
+      - alert: PlatformAuthenticationFailureSpike
+        expr: |
+          sum(increase(platform_auth_attempts_total{
+            platform_outcome=~"failed|rate_limited"
+          }[5m])) > 20
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Authentication failures or throttled attempts are spiking
+          runbook: security/authentication-spike
+
+      - alert: PlatformBudgetLedgerWriteFailed
+        expr: |
+          sum(increase(platform_budget_ledger_writes_total{
+            platform_outcome="failed"
+          }[5m])) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: Spend or reservation state could not be persisted
+          runbook: governance/budget-ledger-failure
+
+      - alert: PlatformUnmeteredBudgetAdmission
+        expr: |
+          sum(increase(platform_budget_decisions_total{
+            platform_outcome="unmetered_fail_open"
+          }[5m])) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: A model call was admitted without a readable budget ledger
+          runbook: governance/budget-ledger-failure
+
+      - alert: PlatformMandatoryAuditWriteFailed
+        expr: |
+          sum(increase(platform_audit_writes_total{
+            platform_outcome="failed",platform_audit_required="true"
+          }[5m])) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: A mandatory audit append failed and privileged work was refused
+          runbook: governance/audit-unavailable
+
+      - alert: PlatformContinuousEvaluationBlocked
+        expr: sum(increase(platform_eval_gates_total{platform_outcome="blocked"}[6h])) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: A continuous evaluation detected a release-blocking regression
+          runbook: governance/eval-regression
+
+      - alert: PlatformContinuousEvaluationNotRunning
+        expr: |
+          absent_over_time(platform_eval_scheduler_passes_total{
+            platform_outcome="succeeded"
+          }[5m]) == 1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: The mandatory continuous evaluation scheduler has stopped
+          runbook: governance/eval-scheduler-stalled
+
+      - alert: PlatformContinuousEvaluationSchedulerFailure
+        expr: |
+          sum(increase(platform_eval_scheduler_passes_total{
+            platform_outcome="failed"
+          }[5m])) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: The continuous evaluation scheduler failed a database pass
+          runbook: governance/eval-scheduler-stalled
+
+      - alert: PlatformRetentionEnforcementFailed
+        expr: |
+          sum(increase(platform_retention_passes_total{
+            platform_outcome="failed"
+          }[5m])) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: A mandatory data-retention enforcement pass failed
+          runbook: governance/retention-failed
+
+      - alert: PlatformRetentionEnforcementNotRunning
+        expr: |
+          absent_over_time(platform_retention_passes_total{
+            platform_outcome="succeeded"
+          }[5m]) == 1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Mandatory data-retention enforcement has stopped
+          runbook: governance/retention-failed

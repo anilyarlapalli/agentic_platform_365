@@ -1,0 +1,77 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: local-platform
+  labels:
+    kubernetes.io/metadata.name: local-platform
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: platform-runtime-config
+data:
+  ENVIRONMENT: production
+  LOG_LEVEL: INFO
+  LLM_PROVIDER: openai
+  OTLP_ENDPOINT: https://otel-collector.observability.svc.cluster.local:4317
+  TELEMETRY_ENABLED: "true"
+  TELEMETRY_TRACE_SAMPLE_RATIO: "0.10"
+  TELEMETRY_METRIC_INTERVAL_MS: "15000"
+  AUDIT_FAIL_CLOSED: "true"
+  BUDGET_FAIL_CLOSED: "true"
+  RATE_LIMIT_ENABLED: "true"
+  RATE_LIMIT_FAIL_CLOSED: "true"
+  VERIFY_PRINCIPAL_STATE: "true"
+  S3_ENDPOINT_URL: https://object-store.example.invalid
+  S3_BUCKET: platform-artifacts
+  S3_REGION: us-east-1
+  BROWSER_ALLOWED_ORIGINS: '["https://platform.example.invalid"]'
+  # Replace with the actual ingress/controller source CIDRs in the production
+  # overlay. '*' is rejected by application startup validation.
+  TRUSTED_PROXY_IPS: 10.0.0.0/8
+  GRAPHRAG_ENABLED: "false"
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: platform-api
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: platform-web
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: platform-worker
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: platform-relay
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: platform-maintenance
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: platform-scheduler
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: platform-migrator
+automountServiceAccountToken: false

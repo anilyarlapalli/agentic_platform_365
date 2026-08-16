@@ -1,0 +1,53 @@
+# KEDA 2.20+ is a required cluster dependency. CPU does not represent queued
+# agent work; the Redis list length does. Fallback keeps six workers running if
+# the scaler cannot read Redis, instead of silently freezing at the last count.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: platform-worker
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: platform-worker
+    envSourceContainerName: worker
+  pollingInterval: 15
+  cooldownPeriod: 300
+  minReplicaCount: 3
+  maxReplicaCount: 100
+  fallback:
+    failureThreshold: 3
+    replicas: 6
+    behavior: static
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleUp:
+          stabilizationWindowSeconds: 0
+          policies:
+            - type: Percent
+              value: 100
+              periodSeconds: 60
+            - type: Pods
+              value: 10
+              periodSeconds: 60
+          selectPolicy: Max
+        scaleDown:
+          # Long agent runs should finish before capacity is removed.
+          stabilizationWindowSeconds: 600
+          policies:
+            - type: Percent
+              value: 20
+              periodSeconds: 60
+  triggers:
+    - type: redis
+      metadata:
+        addressFromEnv: KEDA_REDIS_ADDRESS
+        usernameFromEnv: KEDA_REDIS_USERNAME
+        passwordFromEnv: KEDA_REDIS_PASSWORD
+        listName: runs
+        listLength: "5"
+        activationListLength: "1"
+        databaseIndex: "1"
+        enableTLS: "true"
+        unsafeSsl: "false"

@@ -1,0 +1,30 @@
+# NOT included by the base kustomization. Copy into a private environment
+# overlay and replace every RFC 5737 TEST-NET range with the corresponding
+# private endpoint CIDR. Never replace these with 0.0.0.0/0.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: platform-approved-external-egress
+  namespace: local-platform
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 192.0.2.0/24 # managed PostgreSQL private endpoint
+      ports:
+        - protocol: TCP
+          port: 5432
+    - to:
+        - ipBlock:
+            cidr: 198.51.100.0/24 # managed Redis private endpoint
+      ports:
+        - protocol: TCP
+          port: 6380
+    - to:
+        - ipBlock:
+            cidr: 203.0.113.0/24 # object store and model-provider private endpoints
+      ports:
+        - protocol: TCP
+          port: 443

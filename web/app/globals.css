@@ -1,0 +1,73 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    font-feature-settings: "kern", "liga";
+  }
+
+  /* The console shows a lot of ids, hashes and cost figures. Tabular numerals
+     keep columns of them from jittering as values update. */
+  .tnum {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@layer components {
+  .card {
+    @apply rounded-2xl border border-cream-300 bg-white shadow-ring;
+  }
+
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2
+           text-sm font-medium transition disabled:cursor-not-allowed
+           disabled:opacity-40;
+  }
+
+  .btn-primary {
+    @apply btn bg-copper-600 text-white hover:bg-copper-700;
+  }
+
+  .btn-ghost {
+    @apply btn border border-cream-300 bg-white text-ink-700 hover:bg-cream-100;
+  }
+
+  .input {
+    @apply w-full rounded-xl border border-cream-300 bg-white px-3 py-2 text-sm
+           text-ink-800 outline-none placeholder:text-ink-400
+           focus:border-copper-400 focus:ring-2 focus:ring-copper-400/20;
+  }
+
+  .label {
+    @apply mb-1 block text-xs font-medium uppercase tracking-wide text-ink-500;
+  }
+
+  .chip {
+    @apply inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs
+           font-medium;
+  }
+}
+
+/* Scrollbars: visible enough to signal overflow, quiet enough not to compete
+   with content in the long transcript and table views. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #ddd6c2 transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: #ddd6c2;
+  border: 3px solid transparent;
+  border-radius: 9999px;
+  background-clip: content-box;
+}

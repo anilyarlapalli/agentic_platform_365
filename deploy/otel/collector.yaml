@@ -1,0 +1,102 @@
+# OTel Collector: one ingestion point, three destinations.
+#
+# The application exports OTLP and knows nothing about Jaeger or Prometheus.
+# That is the same seam the Azure build has (`configure_azure_monitor`) with a
+# different exporter behind it — which is the point: swapping the telemetry
+# backend must not be a code change.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 2s
+    send_batch_size: 512
+
+  # Hard ceiling so a telemetry burst cannot become the outage. A dropped span
+  # is an acceptable loss; a collector OOM that takes the export path down for
+  # every service is not.
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 256
+    spike_limit_mib: 64
+
+  # Defence in depth against the attribute-safety rule the application also
+  # enforces in code. Prompts, completions and credentials must never reach a
+  # telemetry backend; enforcing it in exactly one place means a single mistake
+  # is enough to leak.
+  attributes/redact:
+    actions:
+      - key: gen_ai.prompt
+        action: delete
+      - key: gen_ai.completion
+        action: delete
+      - key: gen_ai.input.messages
+        action: delete
+      - key: gen_ai.output.messages
+        action: delete
+      - key: gen_ai.system_instructions
+        action: delete
+      - key: gen_ai.tool.call.arguments
+        action: delete
+      - key: gen_ai.tool.call.result
+        action: delete
+      - key: db.statement
+        action: delete
+      - key: db.query.text
+        action: delete
+      - key: http.request.header.authorization
+        action: delete
+      - key: http.request.header.cookie
+        action: delete
+      - key: http.response.header.set_cookie
+        action: delete
+      - key: url.query
+        action: delete
+
+exporters:
+  otlp/jaeger:
+    endpoint: jaeger:4317
+    tls:
+      insecure: true
+
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    # Resource attributes become labels for service/release/environment. Tenant
+    # and principal are deliberately absent from metrics to bound cardinality.
+    resource_to_telemetry_conversion:
+      enabled: true
+
+  debug:
+    verbosity: basic
+
+  # Loki's native OTLP endpoint retains structured log attributes and trace
+  # correlation. The collector appends /v1/logs to this base endpoint.
+  otlphttp/loki:
+    endpoint: http://loki:3100/otlp
+    tls:
+      insecure: true
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, attributes/redact, batch]
+      exporters: [otlp/jaeger]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [prometheus]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, attributes/redact, batch]
+      exporters: [otlphttp/loki, debug]
+
+  telemetry:
+    logs:
+      level: warn

@@ -1,0 +1,12 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: local-platform
+resources:
+  - foundation.yaml
+  - api-web.yaml
+  - workers.yaml
+  - migration-job.yaml
+  - availability.yaml
+  - network-policy.yaml
+  - worker-autoscaling.yaml
+

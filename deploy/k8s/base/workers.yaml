@@ -1,0 +1,456 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: platform-worker
+  labels:
+    app.kubernetes.io/name: platform-worker
+    app.kubernetes.io/component: run-worker
+spec:
+  replicas: 3
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: platform-worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: platform-worker
+        app.kubernetes.io/component: run-worker
+        app.kubernetes.io/version: unreleased
+    spec:
+      serviceAccountName: platform-worker
+      automountServiceAccountToken: false
+      # Celery's hard task limit is 30 minutes. Let a terminating pod finish
+      # first; late acknowledgements and leases recover it if the node cannot.
+      terminationGracePeriodSeconds: 1900
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: platform-worker
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: platform-worker
+      containers:
+        - name: worker
+          image: registry.example.invalid/local-platform:unreleased
+          imagePullPolicy: IfNotPresent
+          command:
+            - python
+            - -m
+            - celery
+            - -A
+            - apps.worker.tasks
+            - worker
+            - --loglevel=INFO
+            - --queues=runs
+            - --concurrency=2
+            - --hostname=run@%h
+            - --max-tasks-per-child=100
+          envFrom:
+            - configMapRef:
+                name: platform-runtime-config
+          env:
+            - name: SERVICE_ROLE
+              value: worker
+            - name: RELEASE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['app.kubernetes.io/version']
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: platform-worker-secrets
+                  key: database-url
+            - name: CELERY_BROKER_URL
+              valueFrom:
+                secretKeyRef:
+                  name: platform-worker-secrets
+                  key: celery-broker-url
+            - name: CELERY_RESULT_BACKEND
+              valueFrom:
+                secretKeyRef:
+                  name: platform-worker-secrets
+                  key: celery-result-backend
+            - name: S3_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: platform-worker-secrets
+                  key: s3-access-key
+            - name: S3_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: platform-worker-secrets
+                  key: s3-secret-key
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: platform-worker-secrets
+                  key: openai-api-key
+            - name: TELEMETRY_HMAC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: platform-worker-secrets
+                  key: telemetry-hmac-key
+            # KEDA reads these from the scale target. The address is host:port,
+            # not a URL; database index 1 is declared in the ScaledObject.
+            - name: KEDA_REDIS_ADDRESS
+              valueFrom:
+                secretKeyRef:
+                  name: platform-worker-secrets
+                  key: redis-address
+            - name: KEDA_REDIS_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: platform-worker-secrets
+                  key: redis-username
+            - name: KEDA_REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: platform-worker-secrets
+                  key: redis-password
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - celery -A apps.worker.tasks inspect ping --destination "run@$HOSTNAME" --timeout 5 | grep -q pong
+            failureThreshold: 2
+            periodSeconds: 30
+            timeoutSeconds: 8
+          resources:
+            requests:
+              cpu: "1"
+              memory: 1Gi
+            limits:
+              cpu: "4"
+              memory: 4Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 256Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: platform-maintenance
+  labels:
+    app.kubernetes.io/name: platform-maintenance
+    app.kubernetes.io/component: maintenance
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: platform-maintenance
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: platform-maintenance
+        app.kubernetes.io/component: maintenance
+        app.kubernetes.io/version: unreleased
+    spec:
+      serviceAccountName: platform-maintenance
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 120
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: platform-maintenance
+      containers:
+        - name: maintenance
+          image: registry.example.invalid/local-platform:unreleased
+          imagePullPolicy: IfNotPresent
+          command:
+            - python
+            - -m
+            - celery
+            - -A
+            - apps.worker.tasks
+            - worker
+            - --loglevel=INFO
+            - --queues=maintenance
+            - --concurrency=1
+            - --hostname=maintenance@%h
+          envFrom:
+            - configMapRef:
+                name: platform-runtime-config
+          env:
+            - name: SERVICE_ROLE
+              value: maintenance
+            - name: RELEASE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['app.kubernetes.io/version']
+            - name: DATABASE_RELAY_URL
+              valueFrom:
+                secretKeyRef:
+                  name: platform-maintenance-secrets
+                  key: database-relay-url
+            - name: CELERY_BROKER_URL
+              valueFrom:
+                secretKeyRef:
+                  name: platform-maintenance-secrets
+                  key: celery-broker-url
+            - name: CELERY_RESULT_BACKEND
+              valueFrom:
+                secretKeyRef:
+                  name: platform-maintenance-secrets
+                  key: celery-result-backend
+            - name: TELEMETRY_HMAC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: platform-maintenance-secrets
+                  key: telemetry-hmac-key
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - celery -A apps.worker.tasks inspect ping --destination "maintenance@$HOSTNAME" --timeout 5 | grep -q pong
+            failureThreshold: 2
+            periodSeconds: 30
+            timeoutSeconds: 8
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 128Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: platform-relay
+  labels:
+    app.kubernetes.io/name: platform-relay
+    app.kubernetes.io/component: relay
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: platform-relay
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: platform-relay
+        app.kubernetes.io/component: relay
+        app.kubernetes.io/version: unreleased
+    spec:
+      serviceAccountName: platform-relay
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: platform-relay
+      containers:
+        - name: relay
+          image: registry.example.invalid/local-platform:unreleased
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "apps.relay.main"]
+          envFrom:
+            - configMapRef:
+                name: platform-runtime-config
+          env:
+            - name: SERVICE_ROLE
+              value: relay
+            - name: RELEASE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['app.kubernetes.io/version']
+            - name: DATABASE_RELAY_URL
+              valueFrom:
+                secretKeyRef:
+                  name: platform-relay-secrets
+                  key: database-relay-url
+            - name: CELERY_BROKER_URL
+              valueFrom:
+                secretKeyRef:
+                  name: platform-relay-secrets
+                  key: celery-broker-url
+            - name: CELERY_RESULT_BACKEND
+              valueFrom:
+                secretKeyRef:
+                  name: platform-relay-secrets
+                  key: celery-result-backend
+            - name: TELEMETRY_HMAC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: platform-relay-secrets
+                  key: telemetry-hmac-key
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 128Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: platform-scheduler
+  labels:
+    app.kubernetes.io/name: platform-scheduler
+    app.kubernetes.io/component: scheduler
+spec:
+  # Duplicate sweep deliveries are safe: database row locks and idempotency
+  # choose the work. Two beat replicas avoid a singleton scheduler outage.
+  replicas: 2
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: platform-scheduler
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: platform-scheduler
+        app.kubernetes.io/component: scheduler
+        app.kubernetes.io/version: unreleased
+    spec:
+      serviceAccountName: platform-scheduler
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: platform-scheduler
+      containers:
+        - name: scheduler
+          image: registry.example.invalid/local-platform:unreleased
+          imagePullPolicy: IfNotPresent
+          command:
+            - python
+            - -m
+            - celery
+            - -A
+            - apps.worker.tasks
+            - beat
+            - --loglevel=INFO
+            - --schedule=/tmp/celerybeat-schedule
+          envFrom:
+            - configMapRef:
+                name: platform-runtime-config
+          env:
+            - name: SERVICE_ROLE
+              value: scheduler
+            - name: RELEASE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['app.kubernetes.io/version']
+            - name: CELERY_BROKER_URL
+              valueFrom:
+                secretKeyRef:
+                  name: platform-scheduler-secrets
+                  key: celery-broker-url
+            - name: CELERY_RESULT_BACKEND
+              valueFrom:
+                secretKeyRef:
+                  name: platform-scheduler-secrets
+                  key: celery-result-backend
+            - name: TELEMETRY_HMAC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: platform-scheduler-secrets
+                  key: telemetry-hmac-key
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 64Mi

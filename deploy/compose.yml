@@ -1,0 +1,168 @@
+# Local substrate for the platform.
+#
+# Ports are offset from every default because this machine already runs an
+# unrelated stack on 5432/5433, 6379, 8080, 11434 and 11435. Nothing here may
+# collide with it: a platform that can only run when it is the only thing on the
+# box has not demonstrated much.
+#
+# Every service is pinned to a digest-stable tag rather than `latest`, because
+# "reproducible" is one of the properties under test.
+
+name: local-platform
+
+x-restart: &restart
+  restart: unless-stopped
+
+services:
+  # ── Postgres: relational state AND vectors, deliberately one store ─────────
+  #
+  # Vectors live here rather than in a dedicated vector service so that tenant
+  # isolation is enforced by row-level security on the same rows as everything
+  # else. A leak then requires defeating Postgres, not merely bypassing an
+  # application-layer filter.
+  postgres:
+    <<: *restart
+    image: pgvector/pgvector:pg16@sha256:ccc6e83d6e35e931dc7c5def2022729d5a6c370318d099181995567ff1fb4d6b
+    environment:
+      POSTGRES_USER: platform_owner
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-platform_dev_only}
+      POSTGRES_DB: platform
+      # Deterministic collation: an index built under one collation and queried
+      # under another is a class of corruption that only shows up in production.
+      POSTGRES_INITDB_ARGS: "--locale=C --encoding=UTF8"
+    ports:
+      - "127.0.0.1:5442:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U platform_owner -d platform"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    command:
+      # Loud logging in dev: a slow query that nobody sees is a latency budget
+      # nobody can defend.
+      - "postgres"
+      - "-c"
+      - "log_min_duration_statement=250"
+      - "-c"
+      - "shared_preload_libraries=pg_stat_statements"
+
+  # ── Redis: Celery broker + tenant-scoped semantic cache ───────────────────
+  redis:
+    <<: *restart
+    image: redis:7-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2
+    ports:
+      - "127.0.0.1:6389:6379"
+    command:
+      # Cache eviction must be bounded or the broker and the cache fight for
+      # memory and the queue is what loses.
+      - "redis-server"
+      - "--maxmemory"
+      - "512mb"
+      - "--maxmemory-policy"
+      - "allkeys-lru"
+      - "--appendonly"
+      - "yes"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # ── MinIO: S3-compatible object store ─────────────────────────────────────
+  #
+  # S3 rather than a filesystem mount because per-tenant bucket policies are a
+  # real thing to test. A path prefix is a convention; a policy is a control.
+  minio:
+    <<: *restart
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-platform}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-platform_dev_only}
+    ports:
+      - "127.0.0.1:9100:9000"
+      - "127.0.0.1:9101:9001"
+    volumes:
+      - miniodata:/data
+    command: ["server", "/data", "--console-address", ":9001"]
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # ── Telemetry ─────────────────────────────────────────────────────────────
+  otel-collector:
+    <<: *restart
+    image: otel/opentelemetry-collector-contrib:0.123.0@sha256:e39311df1f3d941923c00da79ac7ba6269124a870ee87e3c3ad24d60f8aee4d2
+    command: ["--config=/etc/otel/config.yaml"]
+    volumes:
+      - ./otel/collector.yaml:/etc/otel/config.yaml:ro
+    ports:
+      - "127.0.0.1:4317:4317"   # OTLP gRPC
+      - "127.0.0.1:4318:4318"   # OTLP HTTP
+    depends_on:
+      - jaeger
+      - loki
+
+  jaeger:
+    <<: *restart
+    image: jaegertracing/all-in-one:1.66.0@sha256:9864182b4e01350fcc64631bdba5f4085f87daae9d477a04c25d9cb362e787a9
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "127.0.0.1:16687:16686"  # UI
+
+  loki:
+    <<: *restart
+    image: grafana/loki:3.7.4@sha256:87f0a067673756a3cede1bcbf0c74875f7df9b09fddb53e399d0c576f756cfcc
+    command: ["-config.file=/etc/loki/local-config.yaml"]
+    volumes:
+      - ./loki/loki.yaml:/etc/loki/local-config.yaml:ro
+      - lokidata:/loki
+    ports:
+      - "127.0.0.1:3110:3100"
+    healthcheck:
+      test: ["CMD", "/usr/bin/loki", "-health"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  prometheus:
+    <<: *restart
+    image: prom/prometheus:v3.2.1@sha256:6927e0919a144aa7616fd0137d4816816d42f6b816de3af269ab065250859a62
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/rules:/etc/prometheus/rules:ro
+      - promdata:/prometheus
+    ports:
+      - "127.0.0.1:9190:9090"
+
+  grafana:
+    <<: *restart
+    image: grafana/grafana:11.6.0@sha256:62d2b9d20a19714ebfe48d1bb405086081bc602aa053e28cf6d73c7537640dfb
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-platform_dev_only}
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafanadata:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3100:3000"
+    depends_on:
+      - prometheus
+      - loki
+
+volumes:
+  pgdata:
+  redisdata:
+  miniodata:
+  promdata:
+  grafanadata:
+  lokidata:
