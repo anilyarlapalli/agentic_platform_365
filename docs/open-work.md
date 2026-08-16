@@ -16,7 +16,7 @@ different kinds of job:
 | **Absent** | The capability was never built. |
 | **Action** | A task for a person, not for the codebase. |
 
-Current tally: **3 defects, 11 unproven, 10 absent, 3 actions.**
+Current tally: **1 defect, 11 unproven, 10 absent, 3 actions.**
 
 The shape of this list is the honest summary of the project: very little is
 broken, a great deal is unverified.
@@ -25,24 +25,18 @@ broken, a great deal is unverified.
 
 ## Defects
 
-### 1. `GRAPHRAG_ENABLED` gates nothing
+### 1–2. `GRAPHRAG_ENABLED` gating and the engine-root default — **closed**
 
-The flag appears only in its `settings.py` declaration and one
-`check_coherence` existence branch. `POST /api/query` with `mode:"graph"` calls
-`engine.install()` unconditionally.
+Closed in Phase 17. The flag is enforced in `prepare_imports`, the single place
+the engine tree is resolved, so it disables graph chat, onboarding drafts and
+schema validation rather than disabling its own startup check.
+`graphrag_engine_root` has no default; enabling without one is a startup
+refusal; `/api/query` answers 501 when the engine is absent.
 
-Its effect is **inverted**: setting it `false` — as
-`deploy/k8s/base/foundation.yaml` does — removes the startup check, so graph
-mode fails at request time instead of at boot. `README.md` states the opposite.
-
-*~1h — fix, property test, README correction.*
-
-### 2. Engine root defaults to a personal absolute path
-
-`graphrag_engine_root` defaults to `/home/anil-y/app_ideas/…`, and that default
-is live in the production manifests. In a container it resolves to nothing.
-
-*~30m — folds into item 1.*
+Removing the default exposed four cases in `test_schema_edit.py` that had been
+depending on the personal path silently. They now skip explicitly when the tree
+is unavailable — which means **the property suite was machine-dependent**, and
+any green CI run that included those four deserves a second look.
 
 ### 3. The API inherits a 35-minute stop grace period
 
